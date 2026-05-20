@@ -1,0 +1,1000 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="icon.png" type="image/png">
+    <title>GEMINI KTV</title>
+    <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+    <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-4622171405116533"crossorigin="anonymous"></script>
+    <style>
+        :root { --bg: #0d0d0d; --panel: #1a1a1a; --primary: #00ff00; --info: #00ccff; --danger: #ff4444; }
+        body { background: var(--bg); color: #fff; font-family: sans-serif; margin: 0; padding: 10px; height: 100vh; display: flex; justify-content: center; overflow: hidden; }
+        .app-container { display: none; gap: 15px; width: 100%; max-width: 1600px; height: 95vh; }
+        
+        .main-area { flex: 3; background: var(--panel); padding: 20px; border-radius: 20px; display: flex; flex-direction: column; box-shadow: 0 10px 30px rgba(0,0,0,0.8); min-width: 0; }
+        .header-controls { display: flex; align-items: center; justify-content: space-between; background: #252525; padding: 15px; border-radius: 12px; margin-bottom: 15px; min-height: 80px;}
+        #my-id { color: var(--primary);font-weight: bold;font-family: monospace;font-size: 28px !important;line-height: 1;letter-spacing: 3px;cursor: pointer;transition: 0.2s;display: inline-block;}
+        #my-id:hover {color: #fff;transform: scale(1.05);}
+        #player-container { width: 100%; aspect-ratio: 16/9; background: #000;background-image: url('wait.png');background-size: cover;background-position: center;background-repeat: no-repeat; border: 2px solid var(--primary); border-radius: 10px; overflow: hidden; position: relative; }
+        #player-container > * { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; }
+        .active-player { display: block !important; }
+        .hide-player-ui .active-player { pointer-events: none; } /* 阻擋滑鼠事件以隱藏自帶UI */
+        iframe, #yt-instance { display: none; }
+
+        .side-area { flex: 0.8; background: #111; padding: 20px; border-radius: 20px; border: 1px solid #333; display: flex; flex-direction: column; min-width: 300px; max-width: 380px; }
+        .side-controls input { width: 100%; padding: 12px; background: #333; border: 1px solid #555; color: #fff; border-radius: 8px; margin-bottom: 10px; box-sizing: border-box; }
+        .btn-group { display: flex; gap: 8px; }
+        .btn-group button { flex: 1; padding: 12px 5px; font-weight: bold; border-radius: 8px; border: none; cursor: pointer; }
+
+        /* 讓房主和賓客都看得到最愛，方便測試 */
+        .fav-section { 
+            display: block; 
+            margin-top: 20px; 
+        }
+
+        /* 展開後的內容容器 */
+        #favorite-panel {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.4s cubic-bezier(0, 1, 0, 1); /* 平滑展開 */
+            background: #1a1a1a;
+            border-radius: 0 0 8px 8px;
+        }
+
+        /* 當有 fav-open 類別時展開 */
+        #favorite-panel.fav-open {
+            max-height: 500px;
+            border: 1px solid #444;
+            border-top: none;
+            transition: max-height 0.4s ease-in;
+        }
+        
+        /* 修改為右下角懸浮樣式 */
+        #qrcode-container { 
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            background: #ffffff; 
+            padding: 12px; 
+            border-radius: 12px; 
+            box-shadow: 0 10px 30px rgba(0,0,0,0.8); 
+            line-height: 0; 
+            z-index: 9999; /* 確保在最上層，甚至超過 side-area */
+            display: none; /* 初始隱藏，由 JS 開啟 */
+            border: 3px solid var(--primary); /* 增加一個邊框讓它更像 KTV 點歌機風格 */
+            transition: transform 0.3s ease;
+        }
+
+        #qrcode-container:hover {
+            transform: scale(1.1); /* 滑鼠移上去稍微放大，方便掃描 */
+        }
+
+        /* 讓賓客端絕對不會看到這個懸浮 QR Code */
+        .guest-view #qrcode-container {
+            display: none !important;
+        }
+
+        #list-content { flex-grow: 1; overflow-y: auto; margin-top: 10px; overflow-x: hidden; }
+        .song-item { padding: 12px; border-bottom: 1px solid #222; display: flex; justify-content: space-between; align-items: center; overflow: hidden; }
+        
+        .song-title { flex: 1; overflow: hidden; white-space: nowrap; margin-right: 10px; font-size: 0.95em; outline: none; position: relative; }
+        /* 增加一個虛擬遮罩，確保跑馬燈超出邊界時會被隱藏而且左右預留漸層陰影（選擇性，這裡讓它直接裁切） */
+        .song-title-text { 
+            display: inline-block; 
+            white-space: pre; 
+            transition: transform 0.3s ease; /* 移開滑鼠時平滑回到原位 */
+        }
+        
+        /* 當滑鼠移上去時才套用跑馬燈動畫 */
+        .song-title:hover .song-title-text {
+            animation: var(--scroll-anim, none);
+        }
+
+        @keyframes scroll-marquee {
+            0%, 10% { transform: translateX(0); }
+            90%, 100% { transform: translateX(var(--scroll-dist)); }
+        }
+
+        #toast { position: fixed; top: 20px; right: 20px; background: var(--info); color: #000; padding: 12px 24px; border-radius: 8px; display: none; z-index: 10000; }
+        
+        /* 拖動時的影子樣式 */
+        .sortable-ghost {
+            opacity: 0.4;
+            background: var(--primary) !important;
+        }
+
+        /* 拖動中的實體樣式 */
+        .sortable-chosen {
+            background: #333 !important;
+        }
+
+        .drag-handle {
+            padding: 10px;
+            font-size: 20px;
+            touch-action: none; /* 防止手機瀏覽器預設的捲動干擾拖拽 */
+        }
+
+        .song-item {
+            touch-action: pan-y; /* 允許垂直捲動頁面，但不干擾拖拽 */
+        }
+        /* 入口遮罩 */
+        #overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #000; z-index: 9999; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 30px; }
+        .login-card { background: #1a1a1a; padding: 40px; border-radius: 20px; border: 1px solid var(--primary); text-align: center; width: 320px; }
+        .login-card input { width: 100%; padding: 15px; margin: 15px 0; background: #333; border: 1px solid #555; color: #fff; border-radius: 8px; box-sizing: border-box; text-align: center; font-size: 1.2em; }
+        .start-btn { width: 100%; padding: 15px; font-size: 18px; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; transition: 0.3s; }
+        .host-btn { background: var(--primary); color: #000; margin-bottom: 10px; }
+        .join-btn { background: var(--info); color: #000; }
+        .start-btn:hover { transform: scale(1.05); opacity: 0.9; }
+
+        /* 隱藏專用 */
+        .hidden { display: none !important; }
+
+        /* 針對賓客模式的排版優化 */
+        .guest-view .main-area { flex: 0; padding: 10px; min-height: auto; }
+        .guest-view #player-container { display: none; } /* 賓客不看影片 */
+        .guest-view #my-id { font-size: 22px !important;color: var(--info);}
+        .guest-view .app-container { flex-direction: column; height: auto; overflow: auto; }
+        .guest-view .side-area { max-width: none; flex: 1; }
+
+        @media (max-width: 1024px) {
+            body { overflow: auto; height: auto; }
+            .app-container { flex-direction: column; height: auto; display: none; }
+            #my-id { font-size: 35px !important; }
+        }
+    </style>
+</head>
+<body>
+
+<div id="overlay">
+    <h1 style="color:var(--primary); margin:0; letter-spacing: 5px;">GEMINI KTV</h1>
+    <div class="login-card">
+        <button class="start-btn host-btn" onclick="startSession('host')">🎤 開啟包廂 (房主)</button>
+        <div style="margin: 20px 0; color: #555;">─── 或者 ───</div>
+        <input type="text" id="join-id" placeholder="輸入 6 位數房號">
+        <button class="start-btn join-btn" onclick="startSession('join')">🎧 加入包廂 (賓客)</button>
+    </div>
+</div>
+
+<div id="toast"></div>
+
+<div class="app-container" id="main-app">
+    <div class="main-area">
+        <div class="header-controls" style="min-height: 50px; padding: 10px 20px;">
+            <div class="header-left" style="display: flex; align-items: center; gap: 15px;">
+                <span style="color:#888; font-size: 0.8em; font-weight: bold;">ROOM CODE:</span> 
+                <span id="my-id" onclick="copyId()" title="點擊複製房號">...</span>
+            </div>
+            <div class="header-right" style="display:flex; align-items:center; gap:10px;">
+                <button id="toggle-ui-btn" onclick="forceHideUI()" style="background:none; border:1px solid #444; color:#fff; border-radius:5px; padding:3px 8px; cursor:pointer; font-size:0.8em; display:none;">👁️ 隱藏介面</button>
+                <span id="role-tag" style="color: #666; font-size: 0.8em;">(電視房主)</span>
+            </div>
+        </div>
+        <div id="player-container">
+            <iframe id="bili-player" allow="autoplay; fullscreen" referrerpolicy="no-referrer"></iframe>
+        </div>
+    </div>
+    <div class="side-area">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+            <h3 id="list-title" style="margin:0; color: var(--primary);">📜 待播清單</h3>
+            <button id="tab-switch-btn" onclick="cycleListMode()" style="background: #333; color: #ffcc00; border: 1px solid #444; padding: 5px 12px; border-radius: 20px; cursor: pointer; font-size: 0.8em; font-weight: bold;">
+                ⭐ 查看最愛
+            </button>
+        </div>
+
+        <div class="side-controls">
+            <input type="text" id="videoUrl" placeholder="貼上網址...">
+            <div class="btn-group">
+                <button style="background:var(--primary); color:#000;" onclick="handleAction('add')">點歌</button>
+                <button style="background:#ffcc00; color:#000;" onclick="handleAction('insert')">插播</button>
+                <button style="background:var(--danger); color:#fff;" onclick="skipSong()">切歌</button>
+            </div>
+            <div id="sort-controls" style="display: none; text-align: right; margin-top: 10px;">
+                <button id="sort-history-btn" onclick="toggleHistorySort()" style="background: transparent; color: #ccc; border: 1px solid rgba(255,255,255,0.4); padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 0.85em; transition: 0.2s;">
+                    🔄 依熱門排序
+                </button>
+            </div>
+        </div>
+
+        <div id="list-content"></div>
+    </div>
+</div>
+<div id="qrcode-container" style="display: none; background: #ffffff; padding: 10px; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); line-height: 0; flex-shrink: 0;">
+    <div id="qrcode"></div>
+</div>
+
+<script>
+    let ytPlayer = null;
+    let isApiReady = false;
+    let songList = []; 
+    let isHost = true;
+    let connections = [];
+    let peer = null;
+    let currentMode = 'queue'; // 'queue' 或 'fav'
+    let historySortMode = 'popular'; // 'popular' 或 'recent'
+
+    // YouTube API 加載監聽
+    function onYouTubeIframeAPIReady() {
+        console.log("YouTube API 已就緒");
+        isApiReady = true;
+    }
+    function startSession(mode) {
+        const overlay = document.getElementById('overlay');
+        const appContainer = document.getElementById('main-app');
+        
+        overlay.style.display = 'none';
+        appContainer.style.display = 'flex';
+        
+        const shortId = Math.random().toString(36).substring(2, 8).toUpperCase();
+        
+        if (mode === 'host') {
+            isHost = true;
+            initPeer(shortId);
+            document.getElementById('role-tag').innerText = "(房主模式)";
+            document.getElementById('toggle-ui-btn').style.display = 'block'; // 房主顯示UI隱藏按鈕
+        } else {
+            isHost = false;
+            const targetId = document.getElementById('join-id').value.trim().toUpperCase();
+            if(!targetId) return location.reload();
+            
+            // --- 賓客模式視覺調整 ---
+            document.body.classList.add('guest-view'); // 套用賓客樣式
+            document.getElementById('player-container').classList.add('hidden'); // 隱藏播放器
+            // -----------------------
+
+            initPeer(shortId);
+            setTimeout(() => connectToHost(targetId), 1000);
+            document.getElementById('role-tag').innerText = "(賓客模式)";
+            
+            // 賓客模式下，將原本顯示自己房號的地方改顯示「連線目標」
+            document.getElementById('my-id').innerText = targetId;
+        }
+    }
+    
+    function initPeer(id) {
+        // 這裡進行賦值，因為上面宣告是 let，所以不會報錯
+        peer = new Peer(id, {
+            config: {
+                'iceServers': [
+                    { url: 'stun:stun.l.google.com:19302' },
+                    { url: 'stun:stun1.l.google.com:19302' },
+                    { url: 'stun:stun2.l.google.com:19302' },
+                    { url: 'stun:stun3.l.google.com:19302' },
+                    { url: 'stun:stun4.l.google.com:19302' }
+                ],
+                'sdpSemantics': 'unified-plan'
+            }
+        });
+
+        peer.on('open', (myId) => {
+            // 1. 只有房主才在畫面上顯示「自己的 ID」
+            if (isHost) {
+                document.getElementById('my-id').innerText = myId;
+                loadSavedQueue();
+                updateUI();
+                playCurrent();
+                
+                // 房主才產生 QR Code
+                const qrBox = document.getElementById('qrcode-container');
+                qrBox.style.display = 'block';
+                const qrElement = document.getElementById('qrcode');
+                qrElement.innerHTML = ""; 
+                const joinUrl = window.location.origin + window.location.pathname + "?room=" + myId;
+                
+                new QRCode(qrElement, {
+                    text: joinUrl,
+                    width: 150,
+                    height: 150,
+                    colorDark : "#000000",
+                    colorLight : "#ffffff",
+                    correctLevel : QRCode.CorrectLevel.H
+                });
+            } else {
+                // 2. 賓客模式：維持顯示「輸入的房號」
+                // 抓取剛才在 startSession 輸入框裡的目標房號
+                const targetId = document.getElementById('join-id').value.trim().toUpperCase();
+                if (targetId) {
+                    document.getElementById('my-id').innerText = targetId;
+                }
+            }
+        });
+        peer.on('connection', (conn) => {
+            setupConn(conn);
+            showToast("📢 賓客已進入包廂");
+        });
+        
+        peer.on('error', (err) => {
+            console.error("PeerJS 發生錯誤:", err.type);
+            if(err.type === 'peer-unavailable') {
+                alert("找不到該房號，請檢查輸入是否正確");
+                window.location.href = window.location.origin + window.location.pathname; // 跳回首頁並清空參數
+            }
+        });
+    }
+
+    function connectToHost(id) {
+        const conn = peer.connect(id);
+        setupConn(conn);
+    }
+    function setupConn(conn) {
+        conn.on('open', () => {
+            console.log("連線已完全開啟");
+            // 只有在連線成功後才存入陣列
+            if (!connections.find(c => c.peer === conn.peer)) {
+                connections.push(conn);
+            }
+            
+            if (isHost) {
+                conn.send({ type: 'sync', list: songList });
+            } else {
+                showToast("✅ 已成功連線至電視");
+            }
+        });
+
+        conn.on('data', (data) => {
+            if (data.type === 'sync') {
+                songList = data.list;
+                // 如果當前是在「待播清單」模式，才自動刷新 UI
+                // 如果在「最愛」模式，靜默更新資料即可，不跳轉畫面
+                if (currentMode === 'queue') {
+                    updateUI();
+                }
+            }
+            if (data.type === 'cmd') {
+                if (data.action === 'add') addSong(data.song, false);
+                else if (data.action === 'insert') addSong(data.song, true);
+                else if (data.action === 'skip') skipSong();
+                else if (data.action === 'remove') removeSong(data.index);
+                else if (data.action === 'move') moveSong(data.from, data.toOffset);
+            } else if (data.type === 'sync') {
+                songList = data.list;
+                updateUI();
+            } else if (data.type === 'sync_history') {
+                window.remoteHistory = data.data;
+                if (currentMode === 'history') {
+                    updateUI();
+                }
+            } else if (data.type === 'req_history' && isHost) {
+                const history = JSON.parse(localStorage.getItem('ktv_history')) || [];
+                conn.send({ type: 'sync_history', data: history });
+            }
+        });
+
+        conn.on('close', () => {
+            // 斷線處理
+            connections = connections.filter(c => c.peer !== conn.peer);
+            showToast("ℹ️ 設備已斷開連線");
+        });
+        
+        conn.on('error', (err) => {
+            console.error("連線錯誤:", err);
+        });
+    }
+
+    function handleAction(action) {
+        const url = document.getElementById('videoUrl').value.trim();
+        const songData = parseUrl(url);
+        if (!songData) return alert("請輸入正確網址");
+
+        if (isHost) {
+            addSong(songData, action === 'insert');
+        } else {
+            // 確保手機端有抓到有效的連線對象
+            const activeConn = connections.find(c => c.open);
+            if (activeConn) {
+                activeConn.send({ type: 'cmd', action: action, song: songData });
+                showToast("🚀 已送出點歌！");
+            } else {
+                alert("與電視連線中斷，請重新連線");
+            }
+        }
+        document.getElementById('videoUrl').value = '';
+    }
+    
+    async function addSong(songData, isInsert) {
+        // 1. 如果是 YouTube，先試著抓取標題
+        if (songData.type === 'youtube') {
+            try {
+                // 設定一個超時機制，避免 API 沒反應導致點歌卡住
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 3000);
+
+                const res = await fetch(`https://noembed.com/embed?url=https://www.youtube.com/watch?v=${songData.id}`, { signal: controller.signal });
+                const json = await res.json();
+                clearTimeout(timeoutId);
+
+                if (json && json.title) {
+                    songData.title = json.title;
+                }
+            } catch (e) {
+                console.warn("標題抓取逾時或失敗，使用 ID 替代");
+                songData.title = "YouTube 影片 (" + songData.id + ")";
+            }
+        }
+
+        // 2. 現在已經拿到標題（或備案名稱）了，再放入清單
+        if (isInsert) {
+            songList.splice(1, 0, songData);
+        } else {
+            songList.push(songData);
+        }
+
+        // 3. 執行 UI 更新與播放邏輯
+        updateUI();
+
+        if (isHost) {
+            if (songList.length === 1) {
+                playCurrent();
+            }
+            // 房主統一廣播最終版本的歌單給所有賓客
+            broadcast();
+        }
+    }
+	
+
+    function playCurrent() {
+        if (songList.length === 0) return;
+        const cur = songList[0];
+        
+        addToHistory(cur);
+        stopAll();
+
+        if (cur.type === 'youtube') {
+            if (!isApiReady) return setTimeout(playCurrent, 1000);
+
+            // 動態建立新的 div 以供 YouTube API 替換
+            const container = document.getElementById('player-container');
+            const ytDiv = document.createElement('div');
+            ytDiv.id = 'yt-instance';
+            ytDiv.classList.add('active-player');
+            container.appendChild(ytDiv);
+
+            ytPlayer = new YT.Player('yt-instance', {
+                height: '100%',
+                width: '100%',
+                videoId: cur.id,
+                playerVars: { 'autoplay': 1, 'controls': 1, 'rel': 0, 'playsinline': 1 },
+                events: {
+                    'onReady': (e) => e.target.playVideo(),
+                    'onStateChange': (e) => { if (e.data === YT.PlayerState.ENDED) skipSong(); },
+                    'onError': () => skipSong()
+                }
+            });
+        } else {
+            const b = document.getElementById('bili-player');
+            b.src = `https://player.bilibili.com/player.html?bvid=${cur.id}&autoplay=1&muted=0&danmaku=0`;
+            b.classList.add('active-player');
+        }
+    }
+
+    function stopAll() {
+        if (ytPlayer && ytPlayer.destroy) {
+            ytPlayer.destroy();
+            ytPlayer = null;
+        }
+        // 清理所有動態生成的 YT 元素
+        const oldYt = document.getElementById('yt-instance');
+        if (oldYt) oldYt.remove();
+
+        const b = document.getElementById('bili-player');
+        b.src = "";
+        b.classList.remove('active-player');
+    }
+
+    function handleAction(action) {
+        const url = document.getElementById('videoUrl').value.trim();
+        const songData = parseUrl(url);
+        if (!songData) return alert("請輸入正確的 YouTube 或 Bilibili 網址");
+
+        if (isHost) {
+            addSong(songData, action === 'insert');
+        } else if (connections[0]?.open) {
+            connections[0].send({ type: 'cmd', action: action, song: songData });
+            showToast("✅ 已送出點歌請求");
+        }
+        document.getElementById('videoUrl').value = '';
+    }
+
+    function skipSong() {
+        if (songList.length === 0) return;
+        if (isHost) {
+            songList.shift();
+            updateUI();
+            if (songList.length > 0) playCurrent(); else stopAll();
+            broadcast();
+        } else if (connections[0]?.open) {
+            connections[0].send({ type: 'cmd', action: 'skip' });
+        }
+    }
+
+    function forceHideUI() {
+        // 模糊焦點以防留在 iframe 內
+        if (document.activeElement) document.activeElement.blur();
+        window.focus();
+
+        const container = document.getElementById('player-container');
+        
+        // 加入阻隔滑鼠事件的 Class，讓 YouTube/Bili 認為滑鼠已移開，開始自動收起介面
+        container.classList.add('hide-player-ui');
+        showToast("已暫時隱藏介面 (滑鼠移入影片即可喚醒)");
+
+        // 綁定單次事件：當滑鼠真正在影片上方移動時，解除阻隔並喚醒
+        setTimeout(() => {
+            const wakeUp = () => {
+                container.classList.remove('hide-player-ui');
+                container.removeEventListener('mousemove', wakeUp);
+            };
+            container.addEventListener('mousemove', wakeUp);
+        }, 300); // 防抖，避免一按下按鈕的輕微位移馬上喚醒
+    }
+
+    function removeSong(i) {
+        if (isHost) {
+            if (i === 0) skipSong();
+            else { songList.splice(i, 1); updateUI(); broadcast(); }
+        } else if (connections[0]?.open) {
+            connections[0].send({ type: 'cmd', action: 'remove', index: i });
+        }
+    }
+
+    // 共用 toggle 最愛副程式
+    function toggleFavoriteSong(song) {
+        if (!song) return;
+
+        let favs = JSON.parse(localStorage.getItem('ktv_favs')) || [];
+        const favIndex = favs.findIndex(f => f.id === song.id);
+
+        if (favIndex >= 0) {
+            favs.splice(favIndex, 1);
+            showToast("💔 已移除最愛");
+        } else {
+            favs.push({
+                id: song.id,
+                type: song.type,
+                title: song.title
+            });
+            showToast("❤️ 已加入最愛");
+        }
+        localStorage.setItem('ktv_favs', JSON.stringify(favs));
+        updateUI();
+    }
+
+    function toggleFavFromQueue(index) {
+        toggleFavoriteSong(songList[index]);
+    }
+
+    function toggleFavFromHistory(historyIndex) {
+        const displayList = isHost ? 
+            (JSON.parse(localStorage.getItem('ktv_history')) || []) : 
+            (window.remoteHistory || []);
+        toggleFavoriteSong(displayList[historyIndex]);
+    }
+
+    // 更新最愛清單的 UI
+    function updateFavUI() {
+        const favBox = document.getElementById('favorite-content');
+        const favs = JSON.parse(localStorage.getItem('ktv_favs')) || [];
+        
+        if (favs.length === 0) {
+            favBox.innerHTML = '<div style="color:#666; text-align:center; padding:20px;">尚無收藏歌曲</div>';
+            return;
+        }
+        
+        favBox.innerHTML = favs.map((s, i) => `
+            <div class="fav-item">
+                <div style="flex:1; cursor:pointer; font-size:14px;" onclick="quickAddFav(${i})">
+                    ${s.title}
+                </div>
+                <button onclick="removeFav(${i})" style="background:none; border:none; color:#ff4444; cursor:pointer; padding-left:10px;">🗑️</button>
+            </div>
+        `).join('');
+    }
+
+    // 點擊最愛歌曲直接點播
+    function quickAddFav(index) {
+        const favs = JSON.parse(localStorage.getItem('ktv_favs')) || [];
+        const song = favs[index];
+        
+        if (isHost) {
+            addSong(song, false);
+        } else {
+            // 抓取當前有效的連線
+            const activeConn = connections.find(c => c.open);
+            if (activeConn) {
+                activeConn.send({ type: 'cmd', action: 'add', song: song });
+                showToast("🚀 已從最愛點歌");
+            } else {
+                alert("與電視連線中斷");
+            }
+        }
+    }
+
+    function quickAddHistory(historyIndex) {
+        const displayList = isHost ? 
+            (JSON.parse(localStorage.getItem('ktv_history')) || []) : 
+            (window.remoteHistory || []);
+        
+        const song = displayList[historyIndex];
+        if (!song) return;
+
+        if (isHost) {
+            addSong(song, false);
+            showToast("🚀 已從歷史紀錄點歌");
+        } else {
+            const activeConn = connections.find(c => c.open);
+            if (activeConn) {
+                activeConn.send({ type: 'cmd', action: 'add', song: song });
+                showToast("🚀 已從歷史紀錄點歌");
+            } else {
+                alert("與電視連線中斷");
+            }
+        }
+    }
+
+    function checkIsFav(id) {
+        const favs = JSON.parse(localStorage.getItem('ktv_favs')) || [];
+        return favs.some(f => f.id === id);
+    }
+
+    // 移除最愛
+    function removeFav(index) {
+        let favs = JSON.parse(localStorage.getItem('ktv_favs')) || [];
+        favs.splice(index, 1);
+        localStorage.setItem('ktv_favs', JSON.stringify(favs));
+        //updateFavUI();
+        updateUI();
+    }
+
+    function cycleListMode() {
+        const btn = document.getElementById('tab-switch-btn');
+        const sortControls = document.getElementById('sort-controls');
+        const title = document.getElementById('list-title');
+
+        if (currentMode === 'queue') {
+            // 切換到「最愛」
+            currentMode = 'fav';
+            btn.innerText = "🕒 查看歷史";
+            btn.style.color = "#00ccff";
+            title.innerText = "⭐ 我的最愛";
+            title.style.color = "#ffcc00";
+            sortControls.style.display = 'none';
+        } else if (currentMode === 'fav') {
+            // 切換到「歷史」
+            currentMode = 'history';
+            btn.innerText = "📜 返回待播";
+            btn.style.color = "var(--primary)";
+            title.innerText = "🕒 歷史紀錄";
+            title.style.color = "#00ccff";
+            sortControls.style.display = 'block';
+
+            if (!isHost) {
+                // 如果是賓客，跟房主請求歷史紀錄
+                const activeConn = connections.find(c => c.open);
+                if (activeConn) activeConn.send({ type: 'req_history' });
+            }
+        } else {
+            // 從「歷史」切換回「待播」
+            currentMode = 'queue';
+            btn.innerText = "⭐ 查看最愛";
+            btn.style.color = "#ffcc00";
+            title.innerText = "📜 待播清單";
+            title.style.color = "var(--primary)";
+            sortControls.style.display = 'none';
+        }
+        updateUI();
+    }
+
+    function toggleHistorySort() {
+        const btn = document.getElementById('sort-history-btn');
+        if (historySortMode === 'popular') {
+            historySortMode = 'recent';
+            btn.innerText = "🔄 依最新排序";
+        } else {
+            historySortMode = 'popular';
+            btn.innerText = "🔄 依熱門排序";
+        }
+        updateUI();
+    }
+
+    // 在網頁開啟時自動載入
+    window.addEventListener('load', updateFavUI);
+
+    function broadcast(customData) {
+        if (isHost) {
+            if (customData) {
+                connections.forEach(c => { if (c.open) c.send(customData); });
+            } else {
+                localStorage.setItem('ktv_queue_backup', JSON.stringify(songList));
+                connections.forEach(c => { if (c.open) c.send({ type: 'sync', list: songList }); });
+            }
+        }
+    }
+
+    function parseUrl(url) {
+        const yt = url.match(/(?:youtube\.com\/.*[?&]v=|youtu\.be\/)([^"&?\/\s]{11})/);
+        const bili = url.match(/(BV[a-zA-Z0-9]{10})/);
+        if (yt) return { id: yt[1], type: 'youtube', title: "YT: " + yt[1] }; // 改用 ID 當預設
+        if (bili) return { id: bili[1], type: 'bilibili', title: 'Bilibili: ' + bili[1] };
+        return null;
+    }
+
+    function updateUI() {
+        const box = document.getElementById('list-content');
+        
+        if (currentMode === 'queue') {
+            box.innerHTML = songList.map((s, i) => `
+                <div class="song-item ${i === 0 ? 'no-drag' : 'draggable'}" data-index="${i}">
+                    ${i !== 0 ? '<span class="drag-handle" style="cursor:grab; color:#666; margin-right:10px; font-size:1.2em;">☰</span>' : '<span style="margin-right:10px; font-size:1.2em; visibility:hidden; width:1.2em;">☰</span>'}
+                    <div class="song-title" style="color:${i === 0 ? 'var(--primary)' : '#fff'}">
+                        <span class="song-title-text">${i === 0 ? '▶️' : i + 1 + '.'} ${s.title}</span>
+                    </div>
+                    <div style="display:flex; gap:10px; align-items:center;">
+                        <button onclick="toggleFavFromQueue(${i})" style="background:none; border:none; cursor:pointer;" title="加入/移除最愛">
+                            ${checkIsFav(s.id) ? '<span style="font-size:1.2em;">⭐</span>' : '<span style="font-size:1.4em; color:#ddd; font-weight:bold;">☆</span>'}
+                        </button>
+                        <button onclick="removeSong(${i})" style="background:none; border:none; color:#666; cursor:pointer; font-size:1.2em;">×</button>
+                    </div>
+                </div>
+            `).join('');
+
+            // 重新初始化拖拽功能
+            initSortable();
+
+            if (songList.length === 0) box.innerHTML = '<div style="color:#444; text-align:center; padding:20px;">清單空空的...</div>';
+        } 
+        else if (currentMode === 'history') {
+            // 房主讀取 local，客戶端讀取廣播來的資料
+            let displayList = isHost ? 
+                (JSON.parse(localStorage.getItem('ktv_history')) || []) : 
+                (window.remoteHistory || []);
+
+            // 根據選擇的模式即時排序
+            displayList = [...displayList].sort((a, b) => {
+                if (historySortMode === 'popular') {
+                    let countA = a.count || 1;
+                    let countB = b.count || 1;
+                    if (countB !== countA) return countB - countA;
+                    return (b.timestamp || 0) - (a.timestamp || 0);
+                } else {
+                    return (b.timestamp || 0) - (a.timestamp || 0);
+                }
+            });
+
+            if (displayList.length === 0) {
+                box.innerHTML = '<div style="color:#666; text-align:center; padding:20px;">尚無點播紀錄 (等待房主同步...)</div>';
+                return;
+            }
+
+            box.innerHTML = displayList.map((s, i) => `
+                <div class="song-item no-drag">
+                    <button onclick="quickAddHistory(${i})" title="新增至待播歌曲" style="background:none; border:none; color:var(--primary); cursor:pointer; font-size:1.5em; margin-right:10px; padding:0; line-height:1;">+</button>
+                    <div class="song-title">
+                        <span class="song-title-text">${s.title} <small style="display:inline; color:var(--primary); margin-left:10px;">🔥 ${s.count || 1} 次</small> <small style="display:inline; color:#888; margin-left:10px;">${s.time}</small></span>
+                    </div>
+                    <div style="display:flex; gap:10px; align-items:center;">
+                        <button onclick="toggleFavFromHistory(${i})" style="background:none; border:none; cursor:pointer;" title="加入/移除最愛">
+                            ${checkIsFav(s.id) ? '<span style="font-size:1.2em;">⭐</span>' : '<span style="font-size:1.4em; color:#ddd; font-weight:bold;">☆</span>'}
+                        </button>
+                    </div>
+                </div>
+            `).join('');
+        }
+        else {
+            // 最愛清單渲染邏輯 (維持原樣或同樣加入拖拽)
+            // --- 渲染最愛清單 ---
+            const favs = JSON.parse(localStorage.getItem('ktv_favs')) || [];
+            if (favs.length === 0) {
+                box.innerHTML = '<div style="color:#666; text-align:center; padding:20px;">尚未收藏任何歌曲</div>';
+                return;
+            }
+            
+            box.innerHTML = favs.map((s, i) => `
+                <div class="song-item draggable" data-index="${i}">
+                    <span class="drag-handle" style="cursor:grab; color:#666; margin-right:10px; font-size:1.2em;">☰</span>
+                    <button onclick="quickAddFav(${i})" title="新增至待播歌曲" style="background:none; border:none; color:var(--primary); cursor:pointer; font-size:1.5em; margin-right:10px; padding:0; line-height:1;">+</button>
+                    <div class="song-title">
+                        <span class="song-title-text">${s.title}</span>
+                    </div>
+                    <div style="display:flex; gap:10px; align-items:center;">
+                        <button onclick="removeFav(${i})" title="刪除最愛" style="background:none; border:none; color:var(--danger); cursor:pointer; font-size:18px;">🗑️</button>
+                    </div>
+                </div>
+            `).join('');
+
+            // 重要：渲染完 HTML 後，也要針對最愛清單初始化 Sortable
+            initSortable();
+        }
+
+        // 動態計算跑馬燈
+        setTimeout(() => {
+            document.querySelectorAll('.song-title').forEach(el => {
+                const textEl = el.querySelector('.song-title-text');
+                if (!textEl) return;
+                const dist = textEl.scrollWidth - el.clientWidth;
+                if (dist > 0) {
+                    textEl.style.setProperty('--scroll-dist', `-${dist + 10}px`); // 稍微多退一點
+                    textEl.style.setProperty('--scroll-anim', `scroll-marquee ${Math.max(3, dist / 30)}s linear infinite alternate`);
+                } else {
+                    textEl.style.setProperty('--scroll-anim', 'none');
+                }
+            });
+        }, 50);
+    }
+    function moveSong(from, toOffset) {
+        if (isHost) {
+            const targetIndex = from + toOffset;
+            const item = songList.splice(from, 1)[0];
+            songList.splice(targetIndex, 0, item);
+            
+            updateUI();
+            broadcast(); // 同步給所有賓客
+        } else if (connections[0]?.open) {
+            connections[0].send({ type: 'cmd', action: 'move', from: from, toOffset: toOffset });
+        }
+    }
+
+    function moveFavorite(from, to) {
+        let favs = JSON.parse(localStorage.getItem('ktv_favs')) || [];
+        
+        // 移動陣列元素
+        const item = favs.splice(from, 1)[0];
+        favs.splice(to, 0, item);
+        
+        // 存回 localStorage
+        localStorage.setItem('ktv_favs', JSON.stringify(favs));
+        
+        // 重新渲染畫面以確保 data-index 正確
+        updateUI();
+        showToast("📋 最愛順序已更新");
+    }
+
+    function initSortable() {
+        const el = document.getElementById('list-content');
+        
+        if (window.sortableInstance) window.sortableInstance.destroy();
+
+        window.sortableInstance = Sortable.create(el, {
+            animation: 150,
+            handle: '.drag-handle',
+            filter: '.no-drag',
+            onEnd: function (evt) {
+                const oldIndex = evt.oldIndex;
+                const newIndex = evt.newIndex;
+                if (oldIndex === newIndex) return;
+
+                if (currentMode === 'queue') {
+                    // 待播清單模式：禁止移到第 0 位（正在播放）
+                    if (newIndex === 0) { 
+                        updateUI(); 
+                        return;
+                    }
+                    moveSong(oldIndex, newIndex - oldIndex);
+                } else {
+                    // 最愛清單模式：直接移動並更新 localStorage
+                    moveFavorite(oldIndex, newIndex);
+                }
+            },
+        });
+    }
+
+    function addToHistory(song) {
+        // 檢查是否為房主
+        if (!isHost) return; 
+
+        let history = JSON.parse(localStorage.getItem('ktv_history')) || [];
+        
+        let existingIndex = history.findIndex(s => s.id === song.id || s.title === song.title);
+        
+        // 紀錄或更新歌曲
+        if (existingIndex !== -1) {
+            let targetSong = history[existingIndex];
+            targetSong.count = (targetSong.count || 1) + 1;
+            targetSong.time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            targetSong.timestamp = Date.now();
+        } else {
+            history.push({
+                id: song.id,
+                type: song.type,
+                title: song.title,
+                time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                timestamp: Date.now(),
+                count: 1
+            });
+        }
+
+        // 以點播次數排序 (多 -> 少)，次數相同則以最新時間排序 (新 -> 舊)
+        history.sort((a, b) => {
+            let countA = a.count || 1;
+            let countB = b.count || 1;
+            if (countB !== countA) {
+                return countB - countA;
+            }
+            return (b.timestamp || 0) - (a.timestamp || 0);
+        });
+
+        // 最多保留 200 首
+        if (history.length > 200) history = history.slice(0, 200);
+
+        // 1. 存入房主本地
+        localStorage.setItem('ktv_history', JSON.stringify(history));
+        
+        // 2. 廣播給所有客戶端
+        broadcast({
+            type: 'sync_history',
+            data: history
+        });
+    }
+
+    function addDefaultSong() {
+        const defaultSong = {
+            id: "dQw4w9WgXcQ",
+            type: 'youtube',
+            title: "Rick Astley - Never Gonna Give You Up"
+        };
+        songList = [defaultSong];
+    }
+
+    function loadSavedQueue() {
+        if (!isHost) return;
+        const saved = localStorage.getItem('ktv_queue_backup');
+        
+        if (saved) {
+            try {
+                const parsed = JSON.parse(saved);
+                // 檢查解析出來的是不是有內容的陣列
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                    songList = parsed;
+                    console.log("📋 已從本地儲存恢復待播清單");
+                } else {
+                    // 如果存檔是空的陣列，則給預設歌曲
+                    addDefaultSong();
+                }
+            } catch (e) {
+                console.error("恢復清單失敗，改用預設歌曲", e);
+                addDefaultSong();
+            }
+        } else {
+            // 完全沒有 localStorage 紀錄時（第一次點開）
+            addDefaultSong();
+        }
+
+    }
+
+    function copyId() { 
+        navigator.clipboard.writeText(document.getElementById('my-id').innerText).then(() => showToast("📋 房號已複製")); 
+    }
+    
+    function showToast(msg) { 
+        const t = document.getElementById('toast'); 
+        t.innerText = msg; 
+        t.style.display = 'block'; 
+        setTimeout(() => t.style.display = 'none', 3000); 
+    }
+
+    window.onload = function() {
+        const urlParams = new URLSearchParams(window.location.search);
+        const roomFromUrl = urlParams.get('room');
+
+        if (roomFromUrl) {
+            const joinInput = document.getElementById('join-id');
+            if (joinInput) {
+                joinInput.value = roomFromUrl.toUpperCase();
+                console.log("偵測到自動連線房號：" + roomFromUrl);
+                
+                // 顯示提示，告知使用者正在自動登入
+                showToast("🚀 正在自動連線至包廂 " + roomFromUrl + "...");
+
+                // 延遲 800 毫秒自動執行連線，給予系統一點緩衝時間
+                setTimeout(() => {
+                    startSession('join');
+                }, 800);
+            }
+        }
+    };
+    
+</script>
+<script src="https://www.youtube.com/iframe_api"></script>
+</body>
+</html>
